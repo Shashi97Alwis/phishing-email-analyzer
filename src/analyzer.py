@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 import whois
 import io
 from contextlib import redirect_stdout
-import os
+import time
 
 # Assumed to be in the same 'src' directory
 from email_parser import EmailParser
@@ -18,30 +18,52 @@ from database_manager import DatabaseManager
 # --- API & Risk Configuration ---
 VIRUSTOTAL_API_KEY = '048cdca383ba19a08eb02cddc6179c90a4db4383f835defd9200e1f7a0f40aec'
 ABUSEIPDB_API_KEY = '5ad63797b25a14f350d1cdd101b3bf549d40ff8cf16318395072a7253b68a7ae74a0b5c459626d42'
+URLSCAN_API_KEY = '01982916-00bf-728f-aebc-96dcd5e40bf2'
 
 VT_HEADERS = {"x-apikey": VIRUSTOTAL_API_KEY}
-ABUSEIPDB_HEADERS = {
-    "Key": ABUSEIPDB_API_KEY,
-    "Accept": "application/json"
-}
+ABUSEIPDB_HEADERS = {"Key": ABUSEIPDB_API_KEY, "Accept": "application/json"}
+URLSCAN_HEADERS = {"API-Key": URLSCAN_API_KEY, "Content-Type": "application/json"}
 
-# --- Recalibrated Risk Scoring Constants (0-100 Scale) ---
+# --- UPDATED: Risk Scoring Constants with Your Preferred Scores + TLD ---
 RISK_FACTORS = {
-    "MALICIOUS_ATTACHMENT": 95, "URL_MALICIOUS_TIER_1": 95, "AUTHENTICATION_FAILURE": 65,
-    "MALICIOUS_IP_IN_URL": 75, "URL_MALICIOUS_TIER_2": 85, "HIGH_ABUSE_IP_SCORE": 70,
-    "MALICIOUS_IP_VT": 70, "DOMAIN_AGE_VERY_NEW": 50, "HOMOGRAPH_DETECTED": 35,
-    "URL_MALICIOUS_TIER_3": 75, "NON_MALICIOUS_IP_IN_URL": 20, "EXCESSIVE_SUBDOMAINS": 20,
-    "PRIVATE_IP_DETECTED": 20, "DOMAIN_AGE_NEW": 25, "URL_MALICIOUS_TIER_4": 70,
-    "SUSPICIOUS_KEYWORDS": 5, "DOMAIN_AGE_RECENT": 10, "LEGITIMATE_SENDER_AUTH": -10,
+    # Your preferred scores
+    "MALICIOUS_ATTACHMENT": 95,
+    "URLSCAN_CONFIRMED_PHISH": 40,
+    "URL_MALICIOUS_TIER_1": 95,
+    "AUTHENTICATION_FAILURE": 65,
+    "MALICIOUS_IP_IN_URL": 75,
+    "URL_MALICIOUS_TIER_2": 85,
+    "URLSCAN_MALICIOUS_VERDICT": 20,
+    "HIGH_ABUSE_IP_SCORE": 70,
+    "MALICIOUS_IP_VT": 70,
+    "DOMAIN_AGE_VERY_NEW": 50,
+    "HOMOGRAPH_DETECTED": 35,
+    "URL_MALICIOUS_TIER_3": 75,
+    "NON_MALICIOUS_IP_IN_URL": 20,
+    "EXCESSIVE_SUBDOMAINS": 20,
+    "PRIVATE_IP_DETECTED": 20,
+    "DOMAIN_AGE_NEW": 25,
+    "URL_MALICIOUS_TIER_4": 70,
+    "SUSPICIOUS_KEYWORDS": 5,
+    "DOMAIN_AGE_RECENT": 10,
+    "LEGITIMATE_SENDER_AUTH": -10,
+
+    # NEW TLD Factors added
+    "LOW_REP_TLD": 30,
+    "UNCOMMON_TLD": 10,
 }
 
-RISK_THRESHOLDS = {
-    "VERY_HIGH": 95,
-    "HIGH": 75,
-    "MEDIUM": 20,
-    "LOW": 10,
-    "VERY_LOW": 1,
-}
+RISK_THRESHOLDS = {"VERY_HIGH": 95, "HIGH": 75, "MEDIUM": 20, "LOW": 10, "VERY_LOW": 1}
+
+# --- TLD Reputation Lists ---
+HIGH_REP_TLDS = [
+    '.com', '.org', '.net', '.gov', '.edu', '.mil', '.int',
+    '.ca', '.uk', '.de', '.jp', '.fr', '.au', '.us', '.ru', '.ch', '.it', '.nl', '.se', '.no', '.es'
+]
+LOW_REP_TLDS = [
+    '.xyz', '.club', '.top', '.live', '.info', '.loan', '.gq', '.ga', '.cf', '.ml', '.work', '.gdn',
+    '.biz', '.online', '.site', '.website', '.tech', '.store', '.space', '.icu'
+]
 
 SUSPICIOUS_KEYWORDS = ['urgent', 'verify', 'password', 'account', 'suspended', 'invoice', 'payment', 'security alert',
                        'confirm', 'login']
@@ -162,6 +184,47 @@ class ThreatAnalyzer:
             print(f"  -> [API ERROR] An unexpected error occurred with {service_name}: {error}")
         return None
 
+    def submit_url_to_urlscan(self, url_to_scan):
+        if 'YOUR_URLSCAN_API_KEY_HERE' in URLSCAN_API_KEY or not URLSCAN_API_KEY:
+            print("  -> [CONFIG ERROR] URLScan.io API key is not set. Skipping scan.")
+            return None
+        cache_key = f"urlscan_submit_{url_to_scan}"
+        if cache_key in self.cache:
+            print(f"  -> [CACHE HIT] Using cached URLScan submission for: {url_to_scan[:40]}...")
+            return self.cache[cache_key]
+        print(f"  -> [API CALL] Submitting URL to URLScan.io: {url_to_scan[:40]}...")
+        data = {"url": url_to_scan, "visibility": "private"}
+        try:
+            response = requests.post("https://urlscan.io/api/v1/scan/", headers=URLSCAN_HEADERS, json=data, timeout=15)
+            response.raise_for_status()
+            result = response.json()
+            if result.get("api"):
+                self.cache[cache_key] = result["api"]
+                return result["api"]
+        except requests.exceptions.RequestException as e:
+            return self._handle_api_error(e, "URLScan.io Submit")
+        return None
+
+    def get_urlscan_report(self, scan_api_url):
+        cache_key = f"urlscan_report_{scan_api_url}"
+        if cache_key in self.cache:
+            print(f"  -> [CACHE HIT] Using cached URLScan report.")
+            return self.cache[cache_key]
+        print("  -> [INFO] Waiting for URLScan.io analysis to complete (can take 20-30s)...")
+        for _ in range(12):
+            time.sleep(5)
+            try:
+                response = requests.get(scan_api_url, timeout=10)
+                if response.status_code == 200:
+                    print("  -> [INFO] Scan complete. Fetching report.")
+                    result = response.json()
+                    self.cache[cache_key] = result
+                    return result
+            except requests.exceptions.RequestException:
+                pass
+        print("  -> [API ERROR] URLScan.io report timed out or failed to retrieve.")
+        return None
+
 
 # --- Parsing & Static Analysis Functions (No Changes) ---
 def parse_abuseipdb_details(result):
@@ -206,7 +269,7 @@ def parse_authentication_results(header_string):
     return results
 
 
-# --- Risk Scoring Algorithm (No Changes) ---
+# --- UPDATED: Risk Scoring Algorithm with TLD Reputation ---
 def calculate_risk_score(email_data, analysis_results):
     risk_score = 0
     risk_reasons = []
@@ -221,14 +284,30 @@ def calculate_risk_score(email_data, analysis_results):
         risk_score += RISK_FACTORS["AUTHENTICATION_FAILURE"]
         risk_reasons.append("Sender failed SPF or DMARC authentication")
 
-    # 2. Check attachments
+    # 2. Check Sender TLD Reputation
+    sender_email = email_data.get("sender", "")
+    if sender_email and '@' in sender_email:
+        sender_domain = sender_email.split('@')[-1].strip('>')
+        tld = '.' + '.'.join(
+            sender_domain.split('.')[-2:]) if ".co." in sender_domain or ".ac." in sender_domain else '.' + \
+                                                                                                      sender_domain.split(
+                                                                                                          '.')[-1]
+
+        if tld in LOW_REP_TLDS:
+            risk_score += RISK_FACTORS["LOW_REP_TLD"]
+            risk_reasons.append(f"Sender uses a low-reputation TLD ({tld})")
+        elif tld not in HIGH_REP_TLDS:
+            risk_score += RISK_FACTORS["UNCOMMON_TLD"]
+            risk_reasons.append(f"Sender uses an uncommon TLD ({tld})")
+
+    # 3. Check attachments
     for result in analysis_results.get("attachments", []):
         if result and result.get("malicious", 0) > 0:
             risk_score += RISK_FACTORS["MALICIOUS_ATTACHMENT"]
             risk_reasons.append(f"Malicious attachment found ({result['name']})")
             break
 
-    # 3. Check URLs
+    # 4. Check URLs
     for result in analysis_results.get("urls", []):
         if result["api_report"]:
             malicious_count = result["api_report"].get("malicious", 0)
@@ -243,6 +322,16 @@ def calculate_risk_score(email_data, analysis_results):
                     f"URL suspicious by API ({malicious_count} vendors)")
             elif malicious_count == 1:
                 risk_score += RISK_FACTORS["URL_MALICIOUS_TIER_4"]; risk_reasons.append(f"URL flagged by 1 vendor")
+
+        if result.get("urlscan_report"):
+            scan_verdicts = result["urlscan_report"].get("verdicts", {})
+            if scan_verdicts.get("overall", {}).get("malicious"):
+                risk_score += RISK_FACTORS["URLSCAN_MALICIOUS_VERDICT"]
+                risk_reasons.append("URLScan.io verdict is malicious")
+            scan_brands = result["urlscan_report"].get("lists", {}).get("brand", [])
+            if scan_brands:
+                risk_score += RISK_FACTORS["URLSCAN_CONFIRMED_PHISH"]
+                risk_reasons.append(f"URLScan.io detected impersonation of brands: {', '.join(scan_brands)}")
 
         if "URL uses a direct IP address" in result["static_findings"]:
             ip_in_url = result.get("ip_in_url")
@@ -278,7 +367,7 @@ def calculate_risk_score(email_data, analysis_results):
                 risk_score += RISK_FACTORS["DOMAIN_AGE_RECENT"]; risk_reasons.append(
                     f"Domain registered in the last year ({age} day(s) old)")
 
-    # 4. Check IPs from body
+    # 5. Check IPs from body
     for result in analysis_results.get("public_ips", []):
         if result["vt_report"] and result["vt_report"].get("malicious", 0) > 0:
             risk_score += RISK_FACTORS["MALICIOUS_IP_VT"]
@@ -291,7 +380,7 @@ def calculate_risk_score(email_data, analysis_results):
         risk_score += RISK_FACTORS["PRIVATE_IP_DETECTED"]
         risk_reasons.append(f"Private IP address found in email body ({ip})")
 
-    # 5. Check keywords
+    # 6. Check keywords
     email_content = (email_data.get("subject", "") + " " + email_data.get("body", "")).lower()
     found_keywords = [kw for kw in SUSPICIOUS_KEYWORDS if kw in email_content]
     if found_keywords:
@@ -311,50 +400,44 @@ def calculate_risk_score(email_data, analysis_results):
         priority = "Very Low"
     else:
         priority = "Informational"
-
     return risk_score, priority, risk_reasons
 
 
+# --- Main Workflow (No Changes) ---
 def run_automated_analysis():
-    """
-    Cleans old data from tables, then fetches, analyzes, and saves new results.
-    """
+    # ... (This function remains exactly the same as the previous version) ...
     print("--- Starting Automated Phishing Analysis ---")
-
-    # Initialize components
     parser = EmailParser()
     db_manager = DatabaseManager()
     threat_analyzer = ThreatAnalyzer()
-
     db_manager.clear_all_data()
-
     messages = parser.fetch_emails(limit=100)
     if not messages:
         print("❌ No emails found. Please run 'send_test_email.py' first.")
         return
-
     print(f"✅ Found {len(messages)} email(s). Beginning analysis...")
-
     for i, msg_data in enumerate(messages):
         print(f"\n{'=' * 20} Analyzing Email #{i + 1} {'=' * 20}")
         email_data = parser.parse_email(msg_data)
         if not email_data: continue
-
         print(f"Subject: {email_data['subject']}")
         print(f"From: {email_data['sender']}")
-
         analysis_results = {"public_ips": [], "private_ips": [], "urls": [], "attachments": []}
-        ip_pattern = r'\b(?:\d{1,3}\.){3}\d{1_3}\b'
-        ips_to_check = set(re.findall(ip_pattern, email_data['body']))
+        ips_to_check = set(re.findall(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', email_data['body']))
         for url in set(email_data['urls']):
             hostname = urlparse(url).hostname
             domain_age_days = threat_analyzer.get_domain_age(hostname) if hostname else 9999
             static_findings, ip_in_url = analyze_url_structure(url)
             if ip_in_url: ips_to_check.add(ip_in_url)
             api_report = parse_vt_analysis(threat_analyzer.check_url_reputation(url))
+            urlscan_report = None
+            if api_report and api_report.get("malicious", 0) > 1:
+                scan_api_url = threat_analyzer.submit_url_to_urlscan(url)
+                if scan_api_url:
+                    urlscan_report = threat_analyzer.get_urlscan_report(scan_api_url)
             analysis_results["urls"].append(
                 {"url": url, "static_findings": static_findings, "domain_age_days": domain_age_days,
-                 "api_report": api_report, "ip_in_url": ip_in_url})
+                 "api_report": api_report, "ip_in_url": ip_in_url, "urlscan_report": urlscan_report})
         for ip in ips_to_check:
             try:
                 ip_obj = ipaddress.ip_address(ip)
