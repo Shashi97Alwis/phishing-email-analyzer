@@ -6,7 +6,7 @@ import pandas as pd
 import time
 import os
 
-# --- Test Data Configuration ---
+#Test Data Configuration
 # Define the path to the test data file
 TEST_DATA_FILE = os.path.join(os.path.dirname(__file__), "test_data", "test_emails.xlsx")
 
@@ -51,7 +51,7 @@ def send_email(subject, sender, body, attachment_filename=None, auth_results=Non
             except FileNotFoundError:
                 print(f"  -> Attachment file not found: {attachment_path}. Sending without attachment.")
 
-        # Connect to MailHog on your working port (1080)
+        #Connect to MailHog on working port (1080)
         with smtplib.SMTP("localhost", 1080, timeout=10) as server:
             server.send_message(msg)
         print(f"✅ Successfully sent email: '{subject}'")
@@ -69,9 +69,9 @@ def generate_and_send_batch():
 
     if not test_cases:
         print("Aborting: No test cases were loaded from the Excel file.")
-        return
+        return []  # Return an empty list on failure
 
-    # Loop through each row from the Excel file and send an email
+    #Loop through each row from the Excel file and send an email
     for case in test_cases:
         send_email(
             subject=case["Subject"],
@@ -90,3 +90,4 @@ if __name__ == "__main__":
     sent_emails = generate_and_send_batch()
     if sent_emails:
         print(f"\n🔍 Check the MailHog UI at http://localhost:8081 to see the {len(sent_emails)} generated emails.")
+

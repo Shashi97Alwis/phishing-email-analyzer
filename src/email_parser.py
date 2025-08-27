@@ -18,7 +18,7 @@ class EmailParser:
             messages = response.json().get("items", [])
             return messages
         except requests.exceptions.RequestException as e:
-            print(f"⚠️ Error fetching emails from MailHog API: {e}")
+            print(f" Error fetching emails from MailHog API: {e}")
             return []
 
     def parse_email(self, message_data):
@@ -46,7 +46,7 @@ class EmailParser:
             if msg.is_multipart():
                 for part in msg.walk():
                     content_type = part.get_content_type()
-                    # We only care about the plain text part for URL extraction
+                    # Only care about the plain text part for URL extraction
                     if content_type == "text/plain":
                         payload = part.get_payload(decode=True)
                         if payload:
@@ -80,11 +80,9 @@ class EmailParser:
             }
 
         except Exception as e:
-            print(f"⚠️ A general error occurred during email parsing: {e}")
+            print(f" A general error occurred during email parsing: {e}")
             return None
 
-
-# --- This block only runs when you execute 'python email_parser.py' directly ---
 if __name__ == "__main__":
     print("--- Running email_parser.py in standalone test mode ---")
 
@@ -92,9 +90,9 @@ if __name__ == "__main__":
     messages = parser.fetch_emails(limit=5)
 
     if not messages:
-        print("❌ No emails found. Ensure MailHog is running and contains emails.")
+        print(" No emails found. Ensure MailHog is running and contains emails.")
     else:
-        print(f"✅ Found {len(messages)} email(s). Parsing...")
+        print(f" Found {len(messages)} email(s). Parsing...")
         for msg_data in messages:
             email_data = parser.parse_email(msg_data)
             if email_data:
